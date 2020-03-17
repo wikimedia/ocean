@@ -32,7 +32,7 @@ func main() {
 
 	args := getopt.Args()
 
-	cmd := "build"
+	cmd := "dev"
 	if len(args) > 0 {
 		cmd = args[0]
 	}
