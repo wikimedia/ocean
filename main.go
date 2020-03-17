@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"strings"
 
 	"gerrit.wikimedia.org/r/blubber/config"
 	"gerrit.wikimedia.org/r/blubber/docker"
@@ -72,7 +73,14 @@ func main() {
 		log.Fatal(err)
 	}
 
-	runCmd := exec.Command("docker", "run", "-v", "/Users/wmf/Source/mediawiki-services-mobileapps/pagelib/:/srv/service/", tag)
+	pwdCmd := exec.Command("pwd")
+	wdb, err := pwdCmd.Output()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	wd := strings.TrimSpace(string(wdb))
+	runCmd := exec.Command("docker", "run", "-v", string(wd)+":/srv/service/", tag)
 	runCmd.Stdout = os.Stdout
 	runCmd.Stderr = os.Stderr
 
