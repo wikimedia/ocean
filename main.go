@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"syscall"
 
 	"gerrit.wikimedia.org/r/blubber/config"
 	"gerrit.wikimedia.org/r/blubber/docker"
@@ -79,14 +80,17 @@ func main() {
 		log.Fatal(err)
 	}
 
+	// Switch to syscall.Exec to make docker the current process so ctrl + c stops the container
 	wd := strings.TrimSpace(string(wdb))
-	runCmd := exec.Command("docker", "run", "-v", string(wd)+":/srv/service/", tag)
-	runCmd.Stdout = os.Stdout
-	runCmd.Stderr = os.Stderr
-
-	err = runCmd.Run()
-	if err != nil {
-		log.Fatal(err)
+	dockerBinary, lookErr := exec.LookPath("docker")
+	if lookErr != nil {
+		panic(lookErr)
+	}
+	dockerArgs := []string{"docker", "run", "--rm", "--interactive", "--tty", "--volume", string(wd) + ":/srv/service/", tag}
+	dockerEnv := os.Environ()
+	execErr := syscall.Exec(dockerBinary, dockerArgs, dockerEnv)
+	if execErr != nil {
+		panic(execErr)
 	}
 }
 
