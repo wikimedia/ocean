@@ -86,7 +86,8 @@ func main() {
 	if lookErr != nil {
 		panic(lookErr)
 	}
-	dockerArgs := []string{"docker", "run", "--rm", "--interactive", "--tty", "--volume", string(wd) + ":/srv/service/", tag}
+	// --volume /srv/service/node_modules excludes node_modules from the volume so that the versions installed in the container are used
+	dockerArgs := []string{"docker", "run", "--rm", "--interactive", "--tty", "--volume", string(wd) + ":/srv/service/", "--volume", "/srv/service/node_modules", tag}
 	dockerEnv := os.Environ()
 	execErr := syscall.Exec(dockerBinary, dockerArgs, dockerEnv)
 	if execErr != nil {
