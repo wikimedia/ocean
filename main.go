@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -32,10 +33,17 @@ func main() {
 
 	args := getopt.Args()
 
-	cmd := "dev"
+	variant := "dev"
 	if len(args) > 0 {
-		cmd = args[0]
+		variant = args[0]
 	}
+
+	oceanJSON, err := getOceanJSON(".ocean/config.json")
+	if err != nil {
+		log.Printf("Failed to read .ocean/config.json %v\n", err)
+		os.Exit(6)
+	}
+	oceanVariant := oceanJSON.Variants[variant]
 
 	pkgJSON, err := getPackageJSON("./package.json")
 	if err != nil {
@@ -48,13 +56,13 @@ func main() {
 		os.Exit(6)
 	}
 
-	dockerfile, err := getDockerfileFromBlubber("./.pipeline/blubber.yaml", cmd)
+	dockerfile, err := getDockerfileFromBlubber("./.pipeline/blubber.yaml", variant)
 	if err != nil {
 		log.Printf("Failed to create Dockerfile from Blubber config %v\n", err)
 		os.Exit(6)
 	}
 
-	tag := pkgJSON.Name + "-" + cmd
+	tag := pkgJSON.Name + "-" + variant
 
 	buildCmd := exec.Command("docker", "build", "--tag", tag, "--file", "-", ".")
 	buildCmd.Stdout = os.Stdout
@@ -87,7 +95,12 @@ func main() {
 		panic(lookErr)
 	}
 	// --volume /srv/service/node_modules excludes node_modules from the volume so that the versions installed in the container are used
-	dockerArgs := []string{"docker", "run", "--rm", "--interactive", "--tty", "--volume", string(wd) + ":/srv/service/", "--volume", "/srv/service/node_modules", tag}
+	dockerArgs := []string{"docker", "run", "--rm", "--interactive", "--tty", "--volume", string(wd) + ":/srv/service/", "--volume", "/srv/service/node_modules"}
+	if oceanVariant.Port != 0 {
+		port := strconv.FormatInt(oceanVariant.Port, 10)
+		dockerArgs = append(dockerArgs, "-p", port+":"+port)
+	}
+	dockerArgs = append(dockerArgs, tag)
 	dockerEnv := os.Environ()
 	execErr := syscall.Exec(dockerBinary, dockerArgs, dockerEnv)
 	if execErr != nil {
@@ -101,6 +114,27 @@ type PackageJSON struct {
 }
 
 func getPackageJSON(path string) (pkg PackageJSON, err error) {
+	data, err := ioutil.ReadFile(path)
+	if err != nil {
+		return
+	}
+
+	err = json.Unmarshal(data, &pkg)
+	return
+}
+
+// Ocean representation of scheme in .ocean/config.json
+type OceanVariant struct {
+	Port int64 // ports aren't 64 bit but it makes this easier to convert to a string
+}
+
+// Ocean representation of .ocean/config.json
+type Ocean struct {
+	Version  string
+	Variants map[string]OceanVariant
+}
+
+func getOceanJSON(path string) (pkg Ocean, err error) {
 	data, err := ioutil.ReadFile(path)
 	if err != nil {
 		return
