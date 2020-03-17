@@ -39,10 +39,6 @@ func main() {
 	}
 
 	oceanJSON, err := getOceanJSON(".ocean/config.json")
-	if err != nil {
-		log.Printf("Failed to read .ocean/config.json %v\n", err)
-		os.Exit(6)
-	}
 	oceanVariant := oceanJSON.Variants[variant]
 
 	pkgJSON, err := getPackageJSON("./package.json")
