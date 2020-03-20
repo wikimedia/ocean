@@ -52,7 +52,7 @@ func main() {
 		os.Exit(6)
 	}
 
-	dockerfile, err := getDockerfileFromBlubber("./.pipeline/blubber.yaml", variant)
+	dockerfile, livesIn, err := getDockerfileFromBlubber("./.pipeline/blubber.yaml", variant)
 	if err != nil {
 		log.Printf("Failed to create Dockerfile from Blubber config %v\n", err)
 		os.Exit(6)
@@ -91,7 +91,7 @@ func main() {
 		panic(lookErr)
 	}
 	// --volume /srv/service/node_modules excludes node_modules from the volume so that the versions installed in the container are used
-	dockerArgs := []string{"docker", "run", "--rm", "--interactive", "--tty", "--volume", string(wd) + ":/srv/service/", "--volume", "/srv/service/node_modules"}
+	dockerArgs := []string{"docker", "run", "--rm", "--interactive", "--tty", "--volume", string(wd) + ":" + livesIn, "--volume", livesIn + "/node_modules"}
 	if oceanVariant.Port != 0 {
 		port := strconv.FormatInt(oceanVariant.Port, 10)
 		dockerArgs = append(dockerArgs, "-p", port+":"+port)
@@ -140,12 +140,12 @@ func getOceanJSON(path string) (pkg Ocean, err error) {
 	return
 }
 
-func getDockerfileFromBlubber(blubberCfgPath string, variant string) (dockerfileBuffer *bytes.Buffer, err error) {
+func getDockerfileFromBlubber(blubberCfgPath string, variant string) (dockerfileBuffer *bytes.Buffer, livesIn string, err error) {
 	blubberCfg, err := config.ReadConfigFile(blubberCfgPath)
 	if err != nil {
 		return
 	}
-
+	livesIn = blubberCfg.Lives.In
 	dockerfileBuffer, err = docker.Compile(blubberCfg, variant)
 	return
 }
