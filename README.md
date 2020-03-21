@@ -9,7 +9,7 @@ Ocean is a command line tool creates standardized frontend JS build and developm
 Install [Go](https://golang.org) and [Docker](https://www.docker.com/) if you haven't already. Ensure `$GOPATH/bin` is in your `$PATH` by adding something along the lines of `export PATH=$PATH:$GOPATH/bin` to your `.zshrc` or `.bashrc`.
 
 ```
-go get github.com/wikimedia/ocean
+go get -u github.com/wikimedia/ocean
 ```
 
 ## Usage
