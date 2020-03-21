@@ -2,18 +2,17 @@ package main
 
 import (
 	"bytes"
-	"encoding/json"
 	"io/ioutil"
 	"log"
 	"os"
 	"os/exec"
-	"strconv"
 	"strings"
 	"syscall"
 
 	"gerrit.wikimedia.org/r/blubber/config"
 	"gerrit.wikimedia.org/r/blubber/docker"
 	"github.com/pborman/getopt/v2"
+	"gopkg.in/yaml.v2"
 )
 
 const parameters = "command"
@@ -38,65 +37,94 @@ func main() {
 		variant = args[0]
 	}
 
-	oceanJSON, err := getOceanJSON(".ocean/config.json")
-	oceanVariant := oceanJSON.Variants[variant]
-
-	pkgJSON, err := getPackageJSON("./package.json")
+	oceanConfig, err := getOceanConfig(".ocean/config.yml")
 	if err != nil {
-		log.Printf("Failed to read package.json %v\n", err)
-		os.Exit(6)
+		log.Printf("Failed to read ocean config %v\n", err)
 	}
 
-	if pkgJSON.Name == "" {
-		log.Printf("package.json is missing a name field")
-		os.Exit(6)
+	if variant == "dockerize" {
+		dockerize(oceanConfig)
+	} else {
+		run(oceanConfig, variant)
 	}
+}
 
-	dockerfile, livesIn, err := getDockerfileFromBlubber("./.pipeline/blubber.yaml", variant)
-	if err != nil {
-		log.Printf("Failed to create Dockerfile from Blubber config %v\n", err)
-		os.Exit(6)
+func dockerize(oceanConfig Ocean) {
+	for variantName, variant := range oceanConfig.Variants {
+		dockerCompose := DockerCompose{Version: "3.7"}
+		dockerCompose.Services = map[string]DockerComposeService{}
+		dockerFileName := getDockerFileNameForVariant(variantName)
+		for serviceName, service := range variant.Services {
+			if service.Path == "" {
+				service.Path = "."
+			} else {
+				service.Path = "./" + service.Path
+			}
+			dockerfilePath := service.Path + "/" + dockerFileName
+			blubberPath := service.Path + "/.pipeline/blubber.yaml"
+			dockerfileBuffer, blubberCfg, err := getDockerFileDataFromBlubber(blubberPath, variantName)
+			if err != nil {
+				log.Fatal(err)
+			}
+			dockerfileData, err := ioutil.ReadAll(dockerfileBuffer)
+			if err != nil {
+				log.Fatal(err)
+			}
+			err = ioutil.WriteFile(dockerfilePath, dockerfileData, 0600)
+			if err != nil {
+				log.Fatal(err)
+			}
+			mainVolume := service.Path + ":" + blubberCfg.Lives.In
+			nodeModulesExclusion := blubberCfg.Lives.In + "/node_modules"
+			volumes := []string{mainVolume, nodeModulesExclusion}
+			build := map[string]string{"dockerfile": dockerFileName, "context": service.Path}
+			dockerCompose.Services[serviceName+getSuffixForVariant(variantName)] = DockerComposeService{Build: build, Ports: service.Ports, Volumes: volumes}
+		}
+		dockerComposeFileData, err := yaml.Marshal(&dockerCompose)
+		if err != nil {
+			log.Fatal(err)
+		}
+		dockerComposePath := getDockerComposeFileNameForVariant(variantName)
+		err = ioutil.WriteFile(dockerComposePath, dockerComposeFileData, 0600)
+		if err != nil {
+			log.Fatal(err)
+		}
+		if variantName == "dev" {
+			// Create a symbolic link so that vanilla `docker-compose up` works for dev
+			lnCmd := exec.Command("ln", "-s", dockerComposePath, "docker-compose.yml")
+			lnCmd.Run()
+		}
 	}
+}
 
-	tag := pkgJSON.Name + "-" + variant
-
-	buildCmd := exec.Command("docker", "build", "--tag", tag, "--file", "-", ".")
-	buildCmd.Stdout = os.Stdout
-	buildCmd.Stderr = os.Stderr
-	buildStdin, err := buildCmd.StdinPipe()
-	if err != nil {
-		log.Fatal(err)
+func run(oceanConfig Ocean, variantName string) {
+	dockerComposePath := getDockerComposeFileNameForVariant(variantName)
+	if _, err := os.Stat(dockerComposePath); os.IsNotExist(err) {
+		dockerize(oceanConfig)
 	}
+	runDockerCompose(dockerComposePath)
+}
 
-	go func() {
-		defer buildStdin.Close()
-		dockerfile.WriteTo(buildStdin)
-	}()
+func getSuffixForVariant(variantName string) (suffix string) {
+	return "-" + variantName
+}
 
-	err = buildCmd.Run()
-	if err != nil {
-		log.Fatal(err)
-	}
+func getDockerComposeFileNameForVariant(variantName string) string {
+	return "docker-compose" + getSuffixForVariant(variantName) + ".yml"
+}
 
-	pwdCmd := exec.Command("pwd")
-	wdb, err := pwdCmd.Output()
-	if err != nil {
-		log.Fatal(err)
-	}
+func getDockerFileNameForVariant(variantName string) string {
+	return "Dockerfile" + getSuffixForVariant(variantName)
+}
 
-	// Switch to syscall.Exec to make docker the current process so ctrl + c stops the container
-	wd := strings.TrimSpace(string(wdb))
-	dockerBinary, lookErr := exec.LookPath("docker")
+func runDockerCompose(dockerComposeFilePath string) {
+	// Use syscall.Exec to make docker the current process so ctrl + c stops the containers
+	dockerBinary, lookErr := exec.LookPath("docker-compose")
 	if lookErr != nil {
-		panic(lookErr)
+		log.Fatal(lookErr)
 	}
-	// --volume /srv/service/node_modules excludes node_modules from the volume so that the versions installed in the container are used
-	dockerArgs := []string{"docker", "run", "--rm", "--interactive", "--tty", "--volume", string(wd) + ":" + livesIn, "--volume", livesIn + "/node_modules"}
-	if oceanVariant.Port != 0 {
-		port := strconv.FormatInt(oceanVariant.Port, 10)
-		dockerArgs = append(dockerArgs, "-p", port+":"+port)
-	}
-	dockerArgs = append(dockerArgs, tag)
+
+	dockerArgs := []string{"docker-compose", "-f", dockerComposeFilePath, "up", "--build"}
 	dockerEnv := os.Environ()
 	execErr := syscall.Exec(dockerBinary, dockerArgs, dockerEnv)
 	if execErr != nil {
@@ -104,48 +132,118 @@ func main() {
 	}
 }
 
-// PackageJSON representation of node.js package.json
-type PackageJSON struct {
-	Name string
+// OceanService representation of service in variant
+type OceanService struct {
+	Path  string
+	Ports []string
 }
 
-func getPackageJSON(path string) (pkg PackageJSON, err error) {
-	data, err := ioutil.ReadFile(path)
-	if err != nil {
-		return
-	}
-
-	err = json.Unmarshal(data, &pkg)
-	return
-}
-
-// Ocean representation of scheme in .ocean/config.json
+// OceanVariant representation of variant
 type OceanVariant struct {
-	Port int64 // ports aren't 64 bit but it makes this easier to convert to a string
+	Services map[string]OceanService
 }
 
-// Ocean representation of .ocean/config.json
+// Ocean config
 type Ocean struct {
 	Version  string
 	Variants map[string]OceanVariant
 }
 
-func getOceanJSON(path string) (pkg Ocean, err error) {
+func getOceanConfig(path string) (config Ocean, err error) {
 	data, err := ioutil.ReadFile(path)
 	if err != nil {
 		return
 	}
 
-	err = json.Unmarshal(data, &pkg)
+	err = yaml.Unmarshal(data, &config)
 	return
 }
 
-func getDockerfileFromBlubber(blubberCfgPath string, variant string) (dockerfileBuffer *bytes.Buffer, livesIn string, err error) {
-	blubberCfg, err := config.ReadConfigFile(blubberCfgPath)
+func getDockerFileDataFromBlubber(blubberCfgPath string, variant string) (dockerfileBuffer *bytes.Buffer, blubberCfg *config.Config, err error) {
+	blubberCfg, err = config.ReadConfigFile(blubberCfgPath)
 	if err != nil {
 		return
 	}
-	livesIn = blubberCfg.Lives.In
 	dockerfileBuffer, err = docker.Compile(blubberCfg, variant)
 	return
+}
+
+// DockerCompose representation
+type DockerCompose struct {
+	Version  string
+	Services map[string]DockerComposeService
+}
+
+// DockerComposeService representation
+type DockerComposeService struct {
+	Image   string            `yaml:"image,omitempty"`
+	Build   map[string]string `yaml:"build,omitempty"`
+	Ports   []string
+	Volumes []string
+}
+
+func getDockerCompose(path string) (pkg DockerCompose, err error) {
+	data, err := ioutil.ReadFile(path)
+	if err != nil {
+		return
+	}
+
+	err = yaml.Unmarshal(data, &pkg)
+	return
+}
+
+// Run once by building and creating a temp dockerfile with the image tags
+// Not currently used, but is an alternative option if we don't want to commit docker configs
+func runOnce(oceanConfig Ocean, variant string) {
+	dockerCompose := DockerCompose{Version: "3.7"}
+	dockerCompose.Services = map[string]DockerComposeService{}
+	oceanVariant := oceanConfig.Variants[variant]
+	for serviceName, service := range oceanVariant.Services {
+		if service.Path == "" {
+			service.Path = "."
+		} else {
+			service.Path = "./" + service.Path
+		}
+		blubberPath := service.Path + "/.pipeline/blubber.yaml"
+		dockerfileBuffer, blubberCfg, err := getDockerFileDataFromBlubber(blubberPath, variant)
+		if err != nil {
+			log.Fatal(err)
+		}
+		tag := serviceName + "-" + variant
+		buildCmd := exec.Command("docker", "build", "--tag", tag, "--file", "-", ".")
+		buildCmd.Stdout = os.Stdout
+		buildCmd.Stderr = os.Stderr
+		buildStdin, err := buildCmd.StdinPipe()
+		if err != nil {
+			log.Fatal(err)
+		}
+		go func() {
+			defer buildStdin.Close()
+			dockerfileBuffer.WriteTo(buildStdin)
+		}()
+		err = buildCmd.Run()
+		if err != nil {
+			log.Fatal(err)
+		}
+		mainVolume := service.Path + ":" + blubberCfg.Lives.In
+		nodeModulesExclusion := blubberCfg.Lives.In + "/node_modules"
+		volumes := []string{mainVolume, nodeModulesExclusion}
+		image := tag
+		dockerCompose.Services[serviceName] = DockerComposeService{Image: image, Ports: service.Ports, Volumes: volumes}
+	}
+	dockerComposeFileData, err := yaml.Marshal(&dockerCompose)
+	if err != nil {
+		log.Fatal(err)
+	}
+	dockerComposePath := ".temp-docker-compose-" + variant + ".yml"
+	err = ioutil.WriteFile(dockerComposePath, dockerComposeFileData, 0600)
+	if err != nil {
+		log.Fatal(err)
+	}
+	pwdCmd := exec.Command("pwd")
+	wdb, err := pwdCmd.Output()
+	wd := strings.TrimSpace(string(wdb))
+	defer os.Remove(wd + dockerComposePath)
+
+	runDockerCompose(dockerComposePath)
 }
