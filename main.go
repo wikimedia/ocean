@@ -75,8 +75,12 @@ func dockerize(oceanConfig Ocean) {
 				log.Fatal(err)
 			}
 			mainVolume := service.Path + ":" + blubberCfg.Lives.In
-			nodeModulesExclusion := blubberCfg.Lives.In + "/node_modules"
-			volumes := []string{mainVolume, nodeModulesExclusion}
+			volumes := []string{mainVolume}
+			// allow for rw to local node modules for install command
+			if variantName != "install" {
+				nodeModulesExclusion := blubberCfg.Lives.In + "/node_modules"
+				volumes = append(volumes, nodeModulesExclusion)
+			}
 			build := map[string]string{"dockerfile": dockerFileName, "context": service.Path}
 			dockerCompose.Services[serviceName+getSuffixForVariant(variantName)] = DockerComposeService{Build: build, Ports: service.Ports, Volumes: volumes}
 		}
@@ -178,8 +182,8 @@ type DockerCompose struct {
 type DockerComposeService struct {
 	Image   string            `yaml:"image,omitempty"`
 	Build   map[string]string `yaml:"build,omitempty"`
-	Ports   []string
-	Volumes []string
+	Ports   []string          `yaml:"ports,omitempty"`
+	Volumes []string          `yaml:"volumes,omitempty"`
 }
 
 func getDockerCompose(path string) (pkg DockerCompose, err error) {
