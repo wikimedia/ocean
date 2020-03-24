@@ -53,16 +53,20 @@ func dockerize(oceanConfig Ocean) {
 	for variantName, variant := range oceanConfig.Variants {
 		dockerCompose := DockerCompose{Version: "3.7"}
 		dockerCompose.Services = map[string]DockerComposeService{}
-		dockerFileName := getDockerFileNameForVariant(variantName)
 		for serviceName, service := range variant.Services {
 			if service.Path == "" {
 				service.Path = "."
 			} else {
 				service.Path = "./" + service.Path
 			}
-			dockerfilePath := service.Path + "/" + dockerFileName
 			blubberPath := service.Path + "/.pipeline/blubber.yaml"
-			dockerfileBuffer, blubberCfg, err := getDockerFileDataFromBlubber(blubberPath, variantName)
+			blubberVariantName := service.Blubber["variant"]
+			if blubberVariantName == "" {
+				blubberVariantName = variantName
+			}
+			dockerFileName := getDockerFileNameForBlubberVariant(blubberVariantName)
+			dockerfilePath := service.Path + "/" + dockerFileName
+			dockerfileBuffer, blubberCfg, err := getDockerFileDataFromBlubber(blubberPath, blubberVariantName)
 			if err != nil {
 				log.Fatal(err)
 			}
@@ -75,14 +79,12 @@ func dockerize(oceanConfig Ocean) {
 				log.Fatal(err)
 			}
 			mainVolume := service.Path + ":" + blubberCfg.Lives.In
-			volumes := []string{mainVolume}
-			// allow for rw to local node modules for install command
-			if variantName != "install" {
-				nodeModulesExclusion := blubberCfg.Lives.In + "/node_modules"
-				volumes = append(volumes, nodeModulesExclusion)
-			}
+			// Exclude /node_modules from the volume so it uses the modules from the
+			// container and not the ones from your local filesystem
+			nodeModulesExclusion := blubberCfg.Lives.In + "/node_modules"
+			volumes := []string{mainVolume, nodeModulesExclusion}
 			build := map[string]string{"dockerfile": dockerFileName, "context": service.Path}
-			dockerCompose.Services[serviceName+getSuffixForVariant(variantName)] = DockerComposeService{Build: build, Ports: service.Ports, Volumes: volumes}
+			dockerCompose.Services[serviceName+getSuffixForVariant(variantName)] = DockerComposeService{Build: build, Ports: service.Ports, Volumes: volumes, Command: service.Command}
 		}
 		dockerComposeFileData, err := yaml.Marshal(&dockerCompose)
 		if err != nil {
@@ -117,8 +119,8 @@ func getDockerComposeFileNameForVariant(variantName string) string {
 	return "docker-compose" + getSuffixForVariant(variantName) + ".yml"
 }
 
-func getDockerFileNameForVariant(variantName string) string {
-	return "Dockerfile" + getSuffixForVariant(variantName)
+func getDockerFileNameForBlubberVariant(blubberVariantName string) string {
+	return "Dockerfile" + getSuffixForVariant(blubberVariantName)
 }
 
 func runDockerCompose(dockerComposeFilePath string) {
@@ -128,7 +130,7 @@ func runDockerCompose(dockerComposeFilePath string) {
 		log.Fatal(lookErr)
 	}
 
-	dockerArgs := []string{"docker-compose", "-f", dockerComposeFilePath, "up", "--build"}
+	dockerArgs := []string{"docker-compose", "-f", dockerComposeFilePath, "up", "--build", "--remove-orphans"}
 	dockerEnv := os.Environ()
 	execErr := syscall.Exec(dockerBinary, dockerArgs, dockerEnv)
 	if execErr != nil {
@@ -138,8 +140,10 @@ func runDockerCompose(dockerComposeFilePath string) {
 
 // OceanService representation of service in variant
 type OceanService struct {
-	Path  string
-	Ports []string
+	Path    string
+	Ports   []string
+	Command string
+	Blubber map[string]string
 }
 
 // OceanVariant representation of variant
@@ -184,6 +188,7 @@ type DockerComposeService struct {
 	Build   map[string]string `yaml:"build,omitempty"`
 	Ports   []string          `yaml:"ports,omitempty"`
 	Volumes []string          `yaml:"volumes,omitempty"`
+	Command string            `yaml:"command,omitempty"`
 }
 
 func getDockerCompose(path string) (pkg DockerCompose, err error) {
