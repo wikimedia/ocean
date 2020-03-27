@@ -84,7 +84,7 @@ func dockerize(oceanConfig Ocean) {
 			nodeModulesExclusion := blubberCfg.Lives.In + "/node_modules"
 			volumes := []string{mainVolume, nodeModulesExclusion}
 			build := map[string]string{"dockerfile": dockerFileName, "context": service.Path}
-			dockerCompose.Services[serviceName+getSuffixForVariant(variantName)] = DockerComposeService{Build: build, Ports: service.Ports, Volumes: volumes, Command: service.Command}
+			dockerCompose.Services[serviceName] = DockerComposeService{Build: build, Ports: service.Ports, Volumes: volumes, Entrypoint: service.Entrypoint}
 		}
 		dockerComposeFileData, err := yaml.Marshal(&dockerCompose)
 		if err != nil {
@@ -112,7 +112,7 @@ func run(oceanConfig Ocean, variantName string) {
 }
 
 func getSuffixForVariant(variantName string) (suffix string) {
-	return "-" + variantName
+	return "." + variantName
 }
 
 func getDockerComposeFileNameForVariant(variantName string) string {
@@ -140,10 +140,10 @@ func runDockerCompose(dockerComposeFilePath string) {
 
 // OceanService representation of service in variant
 type OceanService struct {
-	Path    string
-	Ports   []string
-	Command string
-	Blubber map[string]string
+	Path       string
+	Ports      []string
+	Entrypoint string
+	Blubber    map[string]string
 }
 
 // OceanVariant representation of variant
@@ -184,11 +184,11 @@ type DockerCompose struct {
 
 // DockerComposeService representation
 type DockerComposeService struct {
-	Image   string            `yaml:"image,omitempty"`
-	Build   map[string]string `yaml:"build,omitempty"`
-	Ports   []string          `yaml:"ports,omitempty"`
-	Volumes []string          `yaml:"volumes,omitempty"`
-	Command string            `yaml:"command,omitempty"`
+	Image      string            `yaml:"image,omitempty"`
+	Build      map[string]string `yaml:"build,omitempty"`
+	Ports      []string          `yaml:"ports,omitempty"`
+	Volumes    []string          `yaml:"volumes,omitempty"`
+	Entrypoint string            `yaml:"entrypoint,omitempty"`
 }
 
 func getDockerCompose(path string) (pkg DockerCompose, err error) {
